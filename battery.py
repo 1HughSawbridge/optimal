@@ -9,7 +9,7 @@ def tidy_prices(path='/Users/hs/Downloads/EPEX_Market_Overview.csv'):
                 'HH RPD WAP (?/MWh)':'HH_EPEX_wap',
                 'Latest HH Trade (?/MWh)':'last_trade_epex'}
 
-    df = pd.read_csv(path, parse_dates=['Start Time (BST)'])[col_dict.keys()].\
+    df = pd.read_csv(path, parse_dates=['Start Time (BST)'],dayfirst=True)[col_dict.keys()].\
             rename(columns=col_dict).\
             set_index('datetime')
 
@@ -47,12 +47,11 @@ class Battery:
         self.opt_df['soc'] = [self.mdl.add_var(f'soc({p})', lb=self.params['min_soc'], ub=self.params['max_soc'])
                               for p in range(self.hrzn)]
 
-        # self.opt_df['power'] = [self.mdl.add_var(f'power({p})', lb=-self.params['cap'], ub=self.params['cap'])
-        #                         for p in range(self.hrzn)]
         self.opt_df['export'] = [self.mdl.add_var(f'export({p})', lb=0, ub=self.params['cap'])
-                                for p in range(self.hrzn)]
+                                 for p in range(self.hrzn)]
+
         self.opt_df['import'] = [self.mdl.add_var(f'import({p})', lb=-self.params['cap'], ub=0)
-                                for p in range(self.hrzn)]
+                                 for p in range(self.hrzn)]
 
     def add_batt_constraints(self):
 
@@ -60,23 +59,27 @@ class Battery:
         self.mdl += self.opt_df['soc'].loc[self.hrzn-1]==self.start_soc , 'end_soc'
 
         for p in range(self.hrzn-1):
-            self.mdl += self.opt_df['soc'][p+1] == self.opt_df['soc'][p] + (self.opt_df['export'][p]+self.opt_df['import'][p])/2 , 'soc_update_rule'
+            self.mdl += self.opt_df['soc'][p+1] == self.opt_df['soc'][p] - (self.opt_df['export'][p]+self.opt_df['import'][p])/2 , 'soc_update_rule'
 
         for mkt in self.market_names:
-            self.mdl += self.opt_df[f'{mkt}-buy'][self.hrzn-1] == 0, f'{mkt}-no_last_buy'
+            self.mdl += self.opt_df[f'{mkt}-buy'][self.hrzn-1] == 0,  f'{mkt}-no_last_buy'
             self.mdl += self.opt_df[f'{mkt}-sell'][self.hrzn-1] == 0, f'{mkt}-no_last_sell'
-            for p in range(self.hrzn): #todo: add back the sum so it works for multiple markets.
-                self.mdl += self.opt_df['import'][p] + self.opt_df['export'][p] == (self.opt_df[f'{mkt}-buy'][p] + self.opt_df[f'{mkt}-sell'][p]), 'no_imbal_rule'
+
+            self.mdl += self.opt_df[f'{mkt}-buy'][0] == 0,  f'{mkt}-no_last_buy'
+            self.mdl += self.opt_df[f'{mkt}-sell'][0] == 0, f'{mkt}-no_last_sell'
+
+            for p in range(self.hrzn):
+                self.mdl += (self.opt_df['import'][p] + self.opt_df['export'][p]) == (self.opt_df[f'{mkt}-buy'][p] + self.opt_df[f'{mkt}-sell'][p]), 'no_imbal_rule'
 
 
     def update_df_opt(self, start):
         self.opt_df['datetime'] = pd.date_range(start=start, periods=self.hrzn, freq='30T')
         for mkt in self.market_names:
-            self.opt_df[f'{mkt}-price'] = self.data[mkt].loc[self.opt_df['datetime']].fillna(method='bfill').values
+            self.opt_df[f'{mkt}-price'] = self.data[mkt][self.opt_df['datetime']].fillna(method='bfill').values
 
     def add_costs(self):
         # todo: could make these time varying
-        self.opt_df['import_costs'] = 50
+        self.opt_df['import_costs'] = 5
         self.opt_df['export_costs'] = 0
         self.opt_df['avlbl'] = 1
 
@@ -104,10 +107,13 @@ class Battery:
 
     def make_plot(self):
         fg=make_subplots(rows=3)
-        for col in ['export', 'import', 'soc']:
-            fg.add_scatter(x=self.opt_df['datetime'],
+        for col in ['export', 'import']:
+            fg.add_bar(x=self.opt_df['datetime'],
                            y=[self.opt_df[col][p].x for p in range(self.hrzn)],
                            name=col, row=1, col=1)
+
+        fg.add_scatter(x=self.opt_df['datetime'], y=[self.opt_df['soc'][p].x for p in range(self.hrzn)],
+                   name='soc', row=1, col=1)
 
         for col in self.market_names:
             fg.add_bar(x=self.opt_df['datetime'],
@@ -148,5 +154,5 @@ if __name__ == "__main__":
 
     df=tidy_prices()
     hermitage=Battery(asset_params=prms, data=df[['EPEX_HR']])
-    hermitage.run_opt(start=df.index[0])
+    hermitage.run_opt(start=df.index[830])
 
