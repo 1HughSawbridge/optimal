@@ -53,12 +53,12 @@ class Battery:
     def add_batt_constraints(self):
         for p in range(1, self.hrzn):
             self.mdl.add_constr(name='soc_model',
-                                lin_expr=self.mdl.soc[p] == self.mdl.soc[p-1] + self.mdl.power[p]/self.params['str'])
+                                lin_expr=self.opt_df['soc'].loc[p] == self.opt_df['soc'].loc[p-1] + self.opt_df['power'].loc[p]/self.params['str'])
 
             self.mdl.add_constr(name='no_imbal',
                                 lin_expr=xsum(
-                                    self.mdl.power[p] == self.mdl.var_by_name(f'{mkt}-buy') +
-                                                         self.mdl.var_by_name(f'{mkt}-sell')
+                                    self.opt_df['power'].loc[p] == self.opt_df[f'{mkt}-buy'].loc[p] +
+                                                                   self.opt_df[f'{mkt}-sell'].loc[p]
                                     for mkt in self.market_names)
                                 )
 
@@ -106,7 +106,7 @@ class Battery:
 
     def run_opt(self, start):
         self.update_df_opt(start)
-        self.mdl.add_constr(name='start_soc',lin_expr=self.mdl.soc[0]==self.start_soc)
+        self.mdl.add_constr(name='start_soc', lin_expr=self.opt_df['soc'].loc[0]==self.start_soc)
         self.add_costs()
         self.mdl.optimize()
         self.update_soc()
