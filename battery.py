@@ -23,13 +23,12 @@ class Battery:
         self.data=data
         self.markets={}
         self.mdl=Model()
-        self.opt_df=pd.DataFrame(data={'datetime':pd.date_range(start='2019-07-25',periods=self.hrzn,freq='30T')})
+        self.opt_df=pd.DataFrame(data={'datetime':pd.date_range(start='2019-07-25', periods=self.hrzn, freq='30T')})
         self.start_soc=0.5
         self.set_up_markets()
         self.add_costs()
         self.set_up_batt_variables()
         self.add_batt_constraints()
-
 
     def set_up_markets(self):
         for mkt in self.market_names:
@@ -43,7 +42,7 @@ class Battery:
             self.opt_df[f'{mkt}-price'] = 1 # doing this to get updated later
 
     def set_up_batt_variables(self):
-        # todo we want to have the start SOC fed in as row [-1] somehow, i think add a blank row
+
         self.opt_df['soc'] = [self.mdl.add_var(f'soc({p})', lb=self.params['min_soc'], ub=self.params['max_soc'])
                               for p in range(self.hrzn)]
 
@@ -54,12 +53,12 @@ class Battery:
                                  for p in range(self.hrzn)]
 
     def add_batt_constraints(self):
-
+        # fixme: markets sum to > more than capacity
         self.mdl += self.opt_df['soc'].loc[0]==self.start_soc , 'start_soc'
-        self.mdl += self.opt_df['soc'].loc[self.hrzn-1]==self.start_soc , 'end_soc'
+        self.mdl += self.opt_df['soc'].loc[self.hrzn-1]==0.5 , 'end_soc'
 
         for p in range(self.hrzn-1):
-            self.mdl += self.opt_df['soc'][p+1] == self.opt_df['soc'][p] - (self.opt_df['export'][p]+self.opt_df['import'][p])/2 , 'soc_update_rule'
+            self.mdl += self.opt_df['soc'][p+1] == self.opt_df['soc'][p] - (self.opt_df['export'][p]+self.params['eff']*self.opt_df['import'][p])/2 , 'soc_update_rule'
 
         for mkt in self.market_names:
             self.mdl += self.opt_df[f'{mkt}-buy'][self.hrzn-1] == 0,  f'{mkt}-no_last_buy'
@@ -79,7 +78,7 @@ class Battery:
 
     def add_costs(self):
         # todo: could make these time varying
-        self.opt_df['import_costs'] = 5
+        self.opt_df['import_costs'] = 25
         self.opt_df['export_costs'] = 0
         self.opt_df['avlbl'] = 1
 
@@ -109,50 +108,49 @@ class Battery:
         fg=make_subplots(rows=3)
         for col in ['export', 'import']:
             fg.add_bar(x=self.opt_df['datetime'],
-                           y=[self.opt_df[col][p].x for p in range(self.hrzn)],
-                           name=col, row=1, col=1)
+                       y=[self.opt_df[col][p].x for p in range(self.hrzn)],
+                       name=col, row=1, col=1)
 
         fg.add_scatter(x=self.opt_df['datetime'], y=[self.opt_df['soc'][p].x for p in range(self.hrzn)],
                    name='soc', row=1, col=1)
 
         for col in self.market_names:
             fg.add_bar(x=self.opt_df['datetime'],
-                           y=[self.opt_df[col+'-buy'][p].x for p in range(self.hrzn)],
-                           name=col+'-buy', row=2, col=1)
+                       y=[self.opt_df[col+'-buy'][p].x for p in range(self.hrzn)],
+                       name=col+'-buy', row=2, col=1)
 
             fg.add_bar(x=self.opt_df['datetime'],
-                           y=[self.opt_df[col+'-sell'][p].x for p in range(self.hrzn)],
-                           name=col+'-sell', row=2, col=1)
+                       y=[self.opt_df[col+'-sell'][p].x for p in range(self.hrzn)],
+                       name=col+'-sell', row=2, col=1)
 
         for col in self.market_names:
             fg.add_scatter(x=self.opt_df['datetime'],
                            y=[self.opt_df[col+'-price'][p] for p in range(self.hrzn)],
-                               name=col+'-price', row=3, col=1)
-
+                           name=col+'-price', row=3, col=1)
         fg.show()
 
     def update_soc(self):
-        # todo: make this as a result of the optimisesr
-        self.start_soc = self.opt_df['soc'].x
+        self.mdl.remove(self.mdl.constr_by_name('start_soc'))
+        self.start_soc = self.opt_df['soc'][1].x  - (self.opt_df['export'][1].x+self.params['eff']*self.opt_df['import'][1].x)/2
+        self.mdl += self.opt_df['soc'].loc[0]==self.start_soc , 'start_soc'
 
     def run_opt(self, start):
         self.update_df_opt(start)
         self.add_costs()
         self.set_up_objective()
         self.mdl.optimize()
-        # self.update_soc()
+        self.update_soc()
         self.make_plot()
 
 if __name__ == "__main__":
-    prms=dict(
-              cap=1,
-              str=1,
-              eff=.89,
-              max_soc=0.95,
-              min_soc=0.05,
+    prms=dict( cap=1,
+               str=1,
+               eff=.89,
+               max_soc=0.95,
+               min_soc=0.05,
             )
-
     df=tidy_prices()
-    hermitage=Battery(asset_params=prms, data=df[['EPEX_HR']])
-    hermitage.run_opt(start=df.index[830])
+    hermitage=Battery(asset_params=prms, data=df)
+    for k in range(1):
+        hermitage.run_opt(start=df.index[2350+k])
 
